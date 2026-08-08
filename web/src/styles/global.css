@@ -1,0 +1,182 @@
+/* ===== Reset ===== */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: #f5f5f5;
+  color: #333;
+  line-height: 1.6;
+}
+
+/* ===== Auth container ===== */
+.auth-container {
+  max-width: 420px;
+  margin: 60px auto;
+  padding: 32px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.auth-container h1 {
+  margin-bottom: 24px;
+  font-size: 1.5rem;
+  text-align: center;
+}
+
+/* ===== Form ===== */
+.form-field {
+  margin-bottom: 20px;
+}
+
+.form-field label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.form-field input[type="email"],
+.form-field input[type="password"] {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 0.9375rem;
+  transition: border-color 0.2s;
+}
+
+.form-field input:focus {
+  outline: none;
+  border-color: #4a90d9;
+}
+
+.form-field-checkbox label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 400;
+  cursor: pointer;
+}
+
+.form-field-checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.field-error {
+  display: block;
+  margin-top: 4px;
+  color: #e74c3c;
+  font-size: 0.8125rem;
+}
+
+/* ===== Button ===== */
+button[type="submit"],
+.auth-container button {
+  width: 100%;
+  padding: 12px;
+  background: #4a90d9;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+button[type="submit"]:hover:not(:disabled),
+.auth-container button:hover:not(:disabled) {
+  background: #3a7bc8;
+}
+
+button[type="submit"]:disabled,
+.auth-container button:disabled {
+  background: #aaa;
+  cursor: not-allowed;
+}
+
+/* ===== Alert ===== */
+.alert {
+  padding: 12px;
+  border-radius: 4px;
+  margin-bottom: 20px;
+  font-size: 0.875rem;
+}
+
+.alert-error {
+  background: #fee;
+  color: #c33;
+  border: 1px solid #fcc;
+}
+
+/* ===== Auth link ===== */
+.auth-link {
+  margin-top: 20px;
+  text-align: center;
+  font-size: 0.875rem;
+}
+
+.auth-link a {
+  color: #4a90d9;
+  text-decoration: none;
+}
+
+.auth-link a:hover {
+  text-decoration: underline;
+}
+
+/* ===== Password strength feedback ===== */
+.password-strength {
+  margin-top: 8px;
+}
+
+.strength-bar {
+  display: flex;
+  align-items: center;
+  height: 24px;
+  border-radius: 4px;
+  margin-bottom: 8px;
+  padding: 0 10px;
+}
+
+.strength-weak {
+  background: #e74c3c;
+}
+
+.strength-medium {
+  background: #f39c12;
+}
+
+.strength-strong {
+  background: #27ae60;
+}
+
+.strength-label {
+  color: #fff;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.strength-rules {
+  list-style: none;
+  font-size: 0.8125rem;
+}
+
+.strength-rules li {
+  padding: 2px 0;
+}
+
+.strength-rules li.met {
+  color: #27ae60;
+}
+
+.strength-rules li.unmet {
+  color: #999;
+}
