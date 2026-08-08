@@ -3,9 +3,11 @@ import { useNavigate, Link } from 'react-router-dom';
 import { register } from '@/api/auth';
 import { checkPasswordStrength, type PasswordCheckResult } from '@/utils/password';
 import type { ApiError } from '@/api/auth';
+import { useAuth } from '@/hooks/useAuth';
 
 export default function Register() {
   const navigate = useNavigate();
+  const { setUser } = useAuth();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -35,7 +37,8 @@ export default function Register() {
     setLoading(true);
 
     try {
-      await register({ email, password });
+      const res = await register({ email, password });
+      setUser(res);  // 用 register 返回的 { user_id, email } 直接设状态
       // 注册成功 -> 后端已自动创建会话 -> 跳转主页
       navigate('/');
     } catch (err) {

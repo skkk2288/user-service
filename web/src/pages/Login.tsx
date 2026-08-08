@@ -2,9 +2,11 @@ import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { login } from '@/api/auth';
 import type { ApiError } from '@/api/auth';
+import { useAuth } from '@/hooks/useAuth';
 
 export default function Login() {
   const navigate = useNavigate();
+  const { setUser } = useAuth();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -22,7 +24,8 @@ export default function Login() {
     setLoading(true);
 
     try {
-      await login({ email, password, remember_me: rememberMe });
+      const res = await login({ email, password, remember_me: rememberMe });
+      setUser(res);  // 用 login 返回的 { user_id, email } 直接设状态
       navigate('/');
     } catch (err) {
       const apiErr = err as ApiError;

@@ -35,7 +35,12 @@ function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }, []);
 
-  const value: AuthContextValue = { user, loading, refreshUser, handleLogout };
+  // 暴露 setUser 供 Login/Register 成功后直接设状态（无需额外 /api/me 请求）
+  const setUserStable = useCallback((u: AuthUser | null) => {
+    setUser(u);
+  }, []);
+
+  const value: AuthContextValue = { user, loading, refreshUser, setUser: setUserStable, handleLogout };
 
   return (
     <AuthContext.Provider value={value}>
