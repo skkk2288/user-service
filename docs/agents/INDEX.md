@@ -22,3 +22,7 @@
 | 2026-08-08 | 后端 | src/middleware/auth.rs | AuthUser extractor（cookie 解析 + HMAC 校验） |
 | 2026-08-08 | 后端 | src/routes/auth.rs | POST /api/register, /api/login, /api/logout, GET /api/me |
 | 2026-08-08 | 后端 | src/main.rs | Axum router 组装 + CORS + tracing |
+| 2026-08-08 | QA | tests/auth_integration.rs | 用户注册登录集成测试（42 cases） |
+| 2026-08-08 | QA | docs/agents/QA/test-report.md | 用户注册登录功能测试报告 |
+| 2026-08-08 | QA | src/lib.rs | 库 crate 入口（集成测试依赖） |
+| 2026-08-08 | QA | Cargo.toml | 添加 [lib] + dev-dependencies (http-body-util, tower) |
