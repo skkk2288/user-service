@@ -3,13 +3,6 @@
 //! Assembles the Axum router with CORS, wires up the auth service with
 //! in-memory repositories, and starts the HTTP server.
 
-mod config;
-mod middleware;
-mod models;
-mod routes;
-mod services;
-mod utils;
-
 use std::sync::Arc;
 
 use axum::routing::{get, post};
@@ -18,9 +11,10 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
-use crate::config::Config;
-use crate::models::{InMemorySessionRepository, InMemoryUserRepository, RateLimiter};
-use crate::services::auth_service::AuthService;
+use user_service::config::Config;
+use user_service::models::{InMemorySessionRepository, InMemoryUserRepository, RateLimiter};
+use user_service::routes;
+use user_service::services::auth_service::AuthService;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

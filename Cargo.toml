@@ -3,6 +3,9 @@ name = "user-service"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "user_service"
+
 [dependencies]
 # Web framework
 axum = { version = "0.8", features = ["macros"] }
@@ -41,3 +44,7 @@ dotenvy = "0.15"
 
 # Cookie handling
 cookie = "0.18"
+
+[dev-dependencies]
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }
