@@ -26,3 +26,6 @@
 | 2026-08-08 | QA | docs/agents/QA/test-report.md | 用户注册登录功能测试报告 |
 | 2026-08-08 | QA | src/lib.rs | 库 crate 入口（集成测试依赖） |
 | 2026-08-08 | QA | Cargo.toml | 添加 [lib] + dev-dependencies (http-body-util, tower) |
+| 2026-08-14 | 后端 | src/routes/health.rs | GET /ping liveness 端点 + 单元测试 |
+| 2026-08-14 | QA | tests/health_integration.rs | /ping 健康检查集成测试（7 cases） |
+| 2026-08-14 | QA | docs/agents/QA/test-report.md | /ping 健康检查功能测试报告 |

@@ -185,3 +185,84 @@
 - v0.1.0 内存存储，服务重启数据丢失（设计如此，v0.2+ 引入 PostgreSQL）
 - bcrypt cost 在测试中降为 4 以加速（生产 12）
 - 前端 UI 交互测试（E2E）未包含在本轮（需 Playwright + 运行中的前后端服务），前端构建检查（typecheck/lint/build）由前端 PR #2 已验证
+
+---
+
+# Test Report: /ping 健康检查接口
+
+> 验收轮次：2026-08-14（后端 PR #6 已 merge，前端确认无回归后由 QA 验收）
+
+## 1. 测试范围
+
+- 验收标准：见 `docs/agents/需求编写/prd-draft.md` 第 3 节（/ping 修订版，2026-08-14）
+- 实现：PR #6 `feat(health): add GET /ping liveness endpoint` → `src/routes/health.rs` + `src/routes/mod.rs` + `src/main.rs`
+- 测试用例数：95（46 单元 + 42 认证集成 + 7 /ping 集成）
+- 通过：95 pass
+- 失败：0 fail
+- 跳过：0 skip
+
+### 本轮新增用例
+
+| 类别 | 文件 | 用例数 | 说明 |
+|------|------|--------|------|
+| 后端单元测试 | `src/routes/health.rs` (#[cfg(test)]) | 1 | ping_returns_200_with_status_ok |
+| 集成测试 | `tests/health_integration.rs` | 7 | /ping 契约 + liveness + 无回归 |
+| **新增合计** | | **8** | |
+
+## 2. 测试用例（/ping）
+
+| # | 用例 | 步骤 | 期望 | 实际 | 结果 |
+|---|------|------|------|------|------|
+| 1 | /ping 返回 200 + status ok | GET /ping | 200，body `{"status":"ok"}` | 200，`{"status":"ok"}` | ✅ pass |
+| 2 | Content-Type 为 application/json | GET /ping，检查响应头 | `application/json` | `application/json` | ✅ pass |
+| 3 | 响应契约精确 | GET /ping，解析 JSON | 仅 `status` 键，值为 "ok"，无多余字段 | 仅 `status` 键 | ✅ pass |
+| 4 | 无需认证 / 无 cookie | GET /ping（无 Cookie/Authorization） | 200 | 200 | ✅ pass |
+| 5 | 高频探活稳定性 | 连续 5 次 GET /ping | 每次 200 且 body 一致（无限流） | 5/5 通过 | ✅ pass |
+| 6 | 无回归：/api/me 未登录 | GET /api/me（无 cookie） | 401 | 401 | ✅ pass |
+| 7 | 无回归：/api/login 错误密码 | POST /api/login 错误密码 | 401 | 401 | ✅ pass |
+| 8 | /ping 单元测试 | `cargo test routes::health` | 200 + JSON + ok | 200 + JSON + ok | ✅ pass |
+
+## 3. 失败用例
+
+无失败用例。全部 95 个测试（46 单元 + 49 集成）通过，其中既有 87 个认证测试（45 单元 + 42 集成）无回归。
+
+## 4. 覆盖率
+
+### PRD 验收标准覆盖
+
+| PRD 验收标准 | 测试覆盖 | 状态 |
+|-------------|---------|------|
+| GET /ping 返回 200 + `{"status":"ok"}` | #1, #3, #8 | ✅ |
+| Content-Type 为 application/json | #2, #8 | ✅ |
+| /ping 不依赖数据库/外部依赖（liveness） | 结构验证：health.rs 仅用 `axum::Json`，无 service/DB state；#4, #5 | ✅ |
+| 为 /ping 补齐单元测试 | #8（health.rs 单测） | ✅ |
+| cargo build / test / clippy 全部通过 | 实测全绿（clippy `-D warnings` 通过） | ✅ |
+| 既有认证功能无回归（42 集成） | auth_integration.rs 42 全过 + #6, #7 | ✅ |
+
+### 模块覆盖
+
+| 模块 | 单元测试 | 集成测试 | 说明 |
+|------|---------|---------|------|
+| routes/health.rs | 1 | 5 | /ping 契约 + liveness（本轮新增） |
+| routes/auth.rs 等既有模块 | 45 | 44 | 无回归（既有 87 + 2 交叉检查） |
+
+## 5. 结论
+
+- [x] 所有验收标准通过（6/6）
+- [x] 无 P0 / P1 bug
+- [x] 既有认证测试（42 集成）全部通过，无回归
+- [x] cargo build / test / clippy / fmt 全绿
+
+**建议发布。**
+
+### 测试环境
+
+- Rust 1.97.1（rustup stable）
+- bcrypt cost=4（测试加速，生产 cost=12）
+- 内存存储（InMemory 仓库）
+- 基于 remote main（`7e3f878`，含 PR #6 merge）验证
+
+### 已知限制
+
+- /ping 的「不依赖 DB」为结构性质验证（代码审查 + 无 state 路由），未做故障注入测试（v0.1.0 无外部依赖可注入）
+- 未做 /ping 性能基准（亚毫秒量级为预期，无 IO 路径）
