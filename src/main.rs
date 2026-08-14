@@ -60,6 +60,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Build router.
     let app = Router::new()
+        .route("/ping", get(routes::health::ping))
         .route("/api/register", post(routes::auth::register))
         .route("/api/login", post(routes::auth::login))
         .route("/api/logout", post(routes::auth::logout))
