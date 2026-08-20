@@ -29,3 +29,9 @@
 | 2026-08-14 | 后端 | src/routes/health.rs | GET /ping liveness 端点 + 单元测试 |
 | 2026-08-14 | QA | tests/health_integration.rs | /ping 健康检查集成测试（7 cases） |
 | 2026-08-14 | QA | docs/agents/QA/test-report.md | /ping 健康检查功能测试报告 |
+| 2026-08-20 | 前端 | web/src/pages/Register.tsx | 注册表单扩展：可选昵称字段 + 确认密码 |
+| 2026-08-20 | 前端 | web/src/pages/Profile.tsx | 资料页：只读邮箱 + 编辑昵称/手机号/头像 + 保存 + 改密入口 + 退出登录 |
+| 2026-08-20 | 前端 | web/src/pages/ChangePassword.tsx | 修改密码页：原/新/确认新密码 + 强度反馈 |
+| 2026-08-20 | 前端 | web/src/api/auth.ts | API 封装扩展：updateProfile/changePassword + MeResponse 新字段 |
+| 2026-08-20 | 前端 | web/src/contexts/AuthContext.ts | AuthUser 扩展 nickname/phone/avatar |
+| 2026-08-20 | 前端 | web/src/App.tsx | 新增 /profile、/change-password 路由 + 导航 |

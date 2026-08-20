@@ -3,6 +3,12 @@ import { createContext } from 'react';
 export interface AuthUser {
   user_id: string;
   email: string;
+  /** 始终非空（默认邮箱前缀） */
+  nickname: string;
+  /** 未填写为 null */
+  phone: string | null;
+  /** 未设置为 null */
+  avatar: string | null;
 }
 
 export interface AuthContextValue {
