@@ -1,10 +1,12 @@
 import { useEffect, useState, useCallback, type ReactNode } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, Link } from 'react-router-dom';
 import { fetchMe, logout } from '@/api/auth';
 import { AuthContext, type AuthUser, type AuthContextValue } from '@/contexts/AuthContext';
 import { useAuth } from '@/hooks/useAuth';
 import Login from '@/pages/Login';
 import Register from '@/pages/Register';
+import Profile from '@/pages/Profile';
+import ChangePassword from '@/pages/ChangePassword';
 
 // ---------------------------------------------------------------------------
 // AuthProvider: 登录状态管理（通过 cookie 调用 /api/me）
@@ -76,8 +78,11 @@ function Home() {
 
   return (
     <div className="auth-container">
-      <h1>欢迎，{user?.email}</h1>
+      <h1>欢迎，{user?.nickname || user?.email}</h1>
       <p>你已登录。</p>
+      <p className="auth-link">
+        <Link to="/profile">个人资料</Link>
+      </p>
       <button onClick={() => handleLogout()}>登出</button>
     </div>
   );
@@ -97,6 +102,22 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <Home />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/profile"
+            element={
+              <ProtectedRoute>
+                <Profile />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/change-password"
+            element={
+              <ProtectedRoute>
+                <ChangePassword />
               </ProtectedRoute>
             }
           />
