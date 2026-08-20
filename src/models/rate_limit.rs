@@ -169,3 +169,115 @@ mod tests {
         ));
     }
 }
+
+// ---------------------------------------------------------------------------
+// IP-window rate limiter (防批量注册/登录)
+// ---------------------------------------------------------------------------
+
+/// A single IP's window record.
+#[derive(Debug, Clone)]
+pub struct IpRateLimitEntry {
+    /// Start of the current 1-minute window.
+    pub window_start: DateTime<Utc>,
+    /// Number of requests counted in the window.
+    pub count: u32,
+}
+
+/// In-memory sliding-window rate limiter keyed by client IP.
+///
+/// Each key (IP) may make at most `max_per_minute` requests per minute;
+/// register and login keep independent counters (separate instances).
+#[derive(Debug)]
+pub struct IpRateLimiter {
+    entries: Arc<RwLock<HashMap<String, IpRateLimitEntry>>>,
+    max_per_minute: u32,
+    window: Duration,
+}
+
+impl IpRateLimiter {
+    pub fn new(max_per_minute: u32) -> Self {
+        Self {
+            entries: Arc::new(RwLock::new(HashMap::new())),
+            max_per_minute,
+            window: Duration::from_secs(60),
+        }
+    }
+
+    /// Attempt to record one request for `ip`. Returns `true` if the request
+    /// is within the window budget (and the count was incremented), `false`
+    /// if the limit has been reached.
+    pub async fn check_and_increment(&self, ip: &str, now: DateTime<Utc>) -> bool {
+        let mut entries = self.entries.write().await;
+        match entries.get_mut(ip) {
+            Some(entry) => {
+                let elapsed = now.signed_duration_since(entry.window_start);
+                if elapsed.num_seconds() >= self.window.as_secs() as i64 {
+                    // Window expired — start a fresh window.
+                    entry.window_start = now;
+                    entry.count = 1;
+                    true
+                } else if entry.count >= self.max_per_minute {
+                    false
+                } else {
+                    entry.count += 1;
+                    true
+                }
+            }
+            None => {
+                entries.insert(
+                    ip.to_string(),
+                    IpRateLimitEntry {
+                        window_start: now,
+                        count: 1,
+                    },
+                );
+                true
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod ip_limiter_tests {
+    use super::*;
+
+    fn make_ip_limiter() -> IpRateLimiter {
+        IpRateLimiter::new(20)
+    }
+
+    #[tokio::test]
+    async fn allows_up_to_limit() {
+        let rl = make_ip_limiter();
+        let now = Utc::now();
+        for _ in 0..20 {
+            assert!(rl.check_and_increment("1.2.3.4", now).await);
+        }
+        // 21st request within the window is denied.
+        assert!(!rl.check_and_increment("1.2.3.4", now).await);
+    }
+
+    #[tokio::test]
+    async fn window_resets_after_minute() {
+        let rl = make_ip_limiter();
+        let now = Utc::now();
+        for _ in 0..20 {
+            assert!(rl.check_and_increment("1.2.3.4", now).await);
+        }
+        assert!(!rl.check_and_increment("1.2.3.4", now).await);
+
+        // 61 seconds later, a new window begins.
+        let later = now + chrono::Duration::seconds(61);
+        assert!(rl.check_and_increment("1.2.3.4", later).await);
+    }
+
+    #[tokio::test]
+    async fn separate_ips_independent() {
+        let rl = make_ip_limiter();
+        let now = Utc::now();
+        for _ in 0..20 {
+            assert!(rl.check_and_increment("1.2.3.4", now).await);
+        }
+        // A different IP is unaffected.
+        assert!(rl.check_and_increment("5.6.7.8", now).await);
+    }
+}

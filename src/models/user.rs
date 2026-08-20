@@ -13,13 +13,17 @@ use uuid::Uuid;
 ///
 /// `password_hash` stores a bcrypt hash; the plaintext password is never
 /// retained.  `email` is stored lowercased (normalized) for case-insensitive
-/// uniqueness checks.
+/// uniqueness checks.  `nickname` is always non-empty (defaults to the email
+/// prefix when not provided); `phone` / `avatar` are optional.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct User {
     pub id: Uuid,
     pub email: String,
     pub password_hash: String,
+    pub nickname: String,
+    pub phone: Option<String>,
+    pub avatar: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -47,6 +51,17 @@ pub trait UserRepository: Send + Sync {
     async fn find_by_email(&self, email: &str) -> Option<User>;
     /// Look up a user by ID.
     async fn find_by_id(&self, id: Uuid) -> Option<User>;
+    /// Update nickname / phone / avatar. Returns the updated `User`, or `None`
+    /// if no user with `id` exists.
+    async fn update_profile(
+        &self,
+        id: Uuid,
+        nickname: String,
+        phone: Option<String>,
+        avatar: Option<String>,
+    ) -> Option<User>;
+    /// Update the password hash. Returns `true` if a user was updated.
+    async fn update_password(&self, id: Uuid, new_hash: String) -> bool;
 }
 
 /// In-memory user repository backed by `tokio::sync::RwLock<HashMap>`.
@@ -98,6 +113,32 @@ impl UserRepository for InMemoryUserRepository {
         let users = self.users.read().await;
         users.get(&id).cloned()
     }
+
+    async fn update_profile(
+        &self,
+        id: Uuid,
+        nickname: String,
+        phone: Option<String>,
+        avatar: Option<String>,
+    ) -> Option<User> {
+        let mut users = self.users.write().await;
+        let user = users.get_mut(&id)?;
+        user.nickname = nickname;
+        user.phone = phone;
+        user.avatar = avatar;
+        user.updated_at = Utc::now();
+        Some(user.clone())
+    }
+
+    async fn update_password(&self, id: Uuid, new_hash: String) -> bool {
+        let mut users = self.users.write().await;
+        let Some(user) = users.get_mut(&id) else {
+            return false;
+        };
+        user.password_hash = new_hash;
+        user.updated_at = Utc::now();
+        true
+    }
 }
 
 #[cfg(test)]
@@ -110,6 +151,9 @@ mod tests {
             id: Uuid::new_v4(),
             email: email.into(),
             password_hash: "fake-hash".into(),
+            nickname: "nickname".into(),
+            phone: None,
+            avatar: None,
             created_at: now,
             updated_at: now,
         }
@@ -144,5 +188,44 @@ mod tests {
         let repo = InMemoryUserRepository::new();
         assert!(repo.find_by_email("nobody@test.com").await.is_none());
         assert!(repo.find_by_id(Uuid::new_v4()).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn update_profile_updates_fields() {
+        let repo = InMemoryUserRepository::new();
+        let user = make_user("alice@example.com");
+        repo.insert(user.clone()).await.unwrap();
+
+        let updated = repo
+            .update_profile(
+                user.id,
+                "爱丽丝".into(),
+                Some("13800138000".into()),
+                Some("https://example.com/a.png".into()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.nickname, "爱丽丝");
+        assert_eq!(updated.phone.as_deref(), Some("13800138000"));
+        assert_eq!(updated.avatar.as_deref(), Some("https://example.com/a.png"));
+
+        // Missing user returns None.
+        assert!(repo
+            .update_profile(Uuid::new_v4(), "x".into(), None, None)
+            .await
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn update_password_updates_hash() {
+        let repo = InMemoryUserRepository::new();
+        let user = make_user("bob@example.com");
+        repo.insert(user.clone()).await.unwrap();
+
+        assert!(repo.update_password(user.id, "new-hash".into()).await);
+        let found = repo.find_by_id(user.id).await.unwrap();
+        assert_eq!(found.password_hash, "new-hash");
+
+        assert!(!repo.update_password(Uuid::new_v4(), "x".into()).await);
     }
 }

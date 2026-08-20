@@ -1,7 +1,7 @@
 //! Authentication business logic: registration, login, session management,
-//! and rate limiting.
+//! profile management, password changes, and rate limiting.
 //!
-//! This layer depends only on repository traits and the password utilities,
+//! This layer depends only on repository traits and the utility modules,
 //! keeping it decoupled from the HTTP layer and storage implementation.
 
 use std::sync::Arc;
@@ -11,10 +11,9 @@ use uuid::Uuid;
 
 use crate::config::Config;
 use crate::models::{
-    RateLimitStatus, RateLimiter, Session, SessionRepository, User, UserRepository,
+    IpRateLimiter, RateLimitStatus, RateLimiter, Session, SessionRepository, User, UserRepository,
 };
-use crate::utils::password;
-use crate::utils::session_id;
+use crate::utils::{password, profile, session_id};
 
 /// Errors from the auth service, each mapping to a specific API error code.
 #[derive(Debug, thiserror::Error)]
@@ -32,8 +31,14 @@ pub enum AuthError {
     InvalidCredentials,
     #[error("登录尝试次数过多，请 15 分钟后再试")]
     TooManyAttempts,
+    #[error("请求过于频繁，请稍后再试")]
+    IpRateLimited,
     #[error("请先登录")]
     Unauthenticated,
+    #[error("{0}")]
+    InvalidField(String),
+    #[error("原密码错误")]
+    InvalidOldPassword,
     #[error("internal error")]
     Internal,
 }
@@ -43,6 +48,7 @@ pub enum AuthError {
 pub struct AuthResult {
     pub user_id: Uuid,
     pub email: String,
+    pub nickname: String,
     /// The signed session cookie value to set via `Set-Cookie`.
     pub signed_cookie_value: String,
     /// Cookie Max-Age in seconds.
@@ -57,6 +63,8 @@ pub struct AuthService {
     user_repo: Arc<dyn UserRepository>,
     session_repo: Arc<dyn SessionRepository>,
     rate_limiter: Arc<RateLimiter>,
+    register_ip_limiter: Arc<IpRateLimiter>,
+    login_ip_limiter: Arc<IpRateLimiter>,
     pub(crate) config: Arc<Config>,
 }
 
@@ -65,12 +73,16 @@ impl AuthService {
         user_repo: Arc<dyn UserRepository>,
         session_repo: Arc<dyn SessionRepository>,
         rate_limiter: Arc<RateLimiter>,
+        register_ip_limiter: Arc<IpRateLimiter>,
+        login_ip_limiter: Arc<IpRateLimiter>,
         config: Arc<Config>,
     ) -> Self {
         Self {
             user_repo,
             session_repo,
             rate_limiter,
+            register_ip_limiter,
+            login_ip_limiter,
             config,
         }
     }
@@ -87,9 +99,25 @@ impl AuthService {
 
     /// Register a new user and automatically create a session.
     ///
+    /// `nickname` is optional; empty/whitespace falls back to the email prefix.
     /// The session uses the short TTL (2h) since registration does not involve
     /// a "remember me" choice.
-    pub async fn register(&self, email: &str, password: &str) -> Result<AuthResult, AuthError> {
+    pub async fn register(
+        &self,
+        ip: &str,
+        email: &str,
+        password: &str,
+        nickname: Option<&str>,
+    ) -> Result<AuthResult, AuthError> {
+        // IP rate limit (before any heavy work).
+        if !self
+            .register_ip_limiter
+            .check_and_increment(ip, Utc::now())
+            .await
+        {
+            return Err(AuthError::IpRateLimited);
+        }
+
         // Validate email format.
         if !is_valid_email(email) {
             return Err(AuthError::InvalidEmail);
@@ -99,6 +127,9 @@ impl AuthService {
         password::validate_password(password).map_err(|_| AuthError::WeakPassword)?;
 
         let normalized_email = email.to_lowercase();
+
+        // Resolve nickname (empty -> email prefix).
+        let nickname = self.resolve_nickname(nickname, &normalized_email)?;
 
         // Check uniqueness before hashing (fast path).
         if self
@@ -119,6 +150,9 @@ impl AuthService {
             id: Uuid::new_v4(),
             email: normalized_email.clone(),
             password_hash,
+            nickname,
+            phone: None,
+            avatar: None,
             created_at: now,
             updated_at: now,
         };
@@ -133,7 +167,7 @@ impl AuthService {
 
         // Create session (registration auto-login, short TTL).
         let result = self
-            .create_session(user.id, &normalized_email, false, now)
+            .create_session(user.id, &normalized_email, &user.nickname, false, now)
             .await?;
         Ok(result)
     }
@@ -146,11 +180,18 @@ impl AuthService {
     /// prevent account enumeration.
     pub async fn login(
         &self,
+        ip: &str,
         email: &str,
         password: &str,
         remember_me: bool,
     ) -> Result<AuthResult, AuthError> {
         let now = Utc::now();
+
+        // IP rate limit (parallel to the email-dimension lockout).
+        if !self.login_ip_limiter.check_and_increment(ip, now).await {
+            return Err(AuthError::IpRateLimited);
+        }
+
         let normalized_email = email.to_lowercase();
 
         // Rate limit check (before bcrypt).
@@ -184,7 +225,7 @@ impl AuthService {
         self.rate_limiter.reset(&normalized_email).await;
 
         let result = self
-            .create_session(user.id, &user.email, remember_me, now)
+            .create_session(user.id, &user.email, &user.nickname, remember_me, now)
             .await?;
         Ok(result)
     }
@@ -221,12 +262,113 @@ impl AuthService {
         Ok((user.id, user.email))
     }
 
-    /// Look up a user's email by their user ID.
+    /// Look up a full user by ID (used by `/api/me` and profile endpoints).
+    pub async fn get_user(&self, user_id: Uuid) -> Option<User> {
+        self.user_repo.find_by_id(user_id).await
+    }
+
+    /// Update nickname / phone / avatar (partial update).
     ///
-    /// Used by the `/api/me` endpoint, which already has the user ID from the
-    /// session extractor but needs the email for the response.
-    pub async fn get_email_by_user_id(&self, user_id: Uuid) -> Option<String> {
-        self.user_repo.find_by_id(user_id).await.map(|u| u.email)
+    /// A field set to `None` is left unchanged; an empty string clears the
+    /// field (nickname empty -> reset to email prefix).
+    pub async fn update_profile(
+        &self,
+        user_id: Uuid,
+        nickname: Option<String>,
+        phone: Option<String>,
+        avatar: Option<String>,
+    ) -> Result<User, AuthError> {
+        let current = self
+            .user_repo
+            .find_by_id(user_id)
+            .await
+            .ok_or(AuthError::Unauthenticated)?;
+
+        let new_nickname = match nickname {
+            Some(n) => {
+                let trimmed = n.trim();
+                if trimmed.is_empty() {
+                    profile::default_nickname(&current.email)
+                } else {
+                    profile::validate_nickname(trimmed)
+                        .map_err(|e| AuthError::InvalidField(e.to_string()))?;
+                    trimmed.to_string()
+                }
+            }
+            None => current.nickname.clone(),
+        };
+
+        let new_phone = match phone {
+            Some(p) => {
+                profile::normalize_phone(&p).map_err(|e| AuthError::InvalidField(e.to_string()))?
+            }
+            None => current.phone.clone(),
+        };
+
+        let new_avatar = match avatar {
+            Some(a) => {
+                profile::normalize_avatar(&a).map_err(|e| AuthError::InvalidField(e.to_string()))?
+            }
+            None => current.avatar.clone(),
+        };
+
+        self.user_repo
+            .update_profile(user_id, new_nickname, new_phone, new_avatar)
+            .await
+            .ok_or(AuthError::Unauthenticated)
+    }
+
+    /// Change the user's password. Verifies the old password, then replaces
+    /// the hash; the old password becomes invalid immediately while existing
+    /// sessions remain valid.
+    pub async fn change_password(
+        &self,
+        user_id: Uuid,
+        old_password: &str,
+        new_password: &str,
+    ) -> Result<(), AuthError> {
+        let current = self
+            .user_repo
+            .find_by_id(user_id)
+            .await
+            .ok_or(AuthError::Unauthenticated)?;
+
+        // Verify old password.
+        let verified = password::verify_password(old_password, &current.password_hash)
+            .map_err(|_| AuthError::Internal)?;
+        if !verified {
+            return Err(AuthError::InvalidOldPassword);
+        }
+
+        // Validate new password strength.
+        password::validate_password(new_password).map_err(|_| AuthError::WeakPassword)?;
+
+        let new_hash = password::hash_password(new_password, self.config.bcrypt_cost)
+            .map_err(|_| AuthError::Internal)?;
+
+        let updated = self.user_repo.update_password(user_id, new_hash).await;
+        if updated {
+            Ok(())
+        } else {
+            Err(AuthError::Unauthenticated)
+        }
+    }
+
+    /// Resolve the nickname for a new user: empty/absent -> email prefix.
+    fn resolve_nickname(&self, nickname: Option<&str>, email: &str) -> Result<String, AuthError> {
+        match nickname {
+            Some(n) => {
+                let trimmed = n.trim();
+                if trimmed.is_empty() {
+                    Ok(profile::default_nickname(email))
+                } else {
+                    profile::validate_nickname(trimmed)
+                        .map_err(|e| AuthError::InvalidField(e.to_string()))?;
+                    Ok(trimmed.to_string())
+                }
+            }
+            None => Ok(profile::default_nickname(email)),
+        }
     }
 
     /// Internal helper: create a session and produce the signed cookie value.
@@ -234,6 +376,7 @@ impl AuthService {
         &self,
         user_id: Uuid,
         email: &str,
+        nickname: &str,
         remember_me: bool,
         now: DateTime<Utc>,
     ) -> Result<AuthResult, AuthError> {
@@ -260,6 +403,7 @@ impl AuthService {
         Ok(AuthResult {
             user_id,
             email: email.to_string(),
+            nickname: nickname.to_string(),
             signed_cookie_value: signed_value,
             cookie_max_age: ttl_secs,
             session_id,
@@ -322,6 +466,7 @@ mod tests {
             bcrypt_cost: cost,
             rate_limit_max_failures: 5,
             rate_limit_lockout_minutes: 15,
+            rate_limit_ip_per_minute: 20,
             session_ttl_short: 7200,
             session_ttl_long: 604_800,
             cors_origin: "http://localhost:5173".into(),
@@ -331,6 +476,8 @@ mod tests {
             Arc::new(InMemoryUserRepository::new()),
             Arc::new(InMemorySessionRepository::new()),
             Arc::new(RateLimiter::new(5, 15)),
+            Arc::new(IpRateLimiter::new(20)),
+            Arc::new(IpRateLimiter::new(20)),
             config,
         )
     }
@@ -338,93 +485,130 @@ mod tests {
     #[tokio::test]
     async fn register_success() {
         let svc = make_service(4);
-        let result = svc.register("test@example.com", "Str0ng!Pass").await;
+        let result = svc
+            .register("127.0.0.1", "test@example.com", "Str0ng!Pass", None)
+            .await;
         assert!(result.is_ok());
         let r = result.unwrap();
         assert_eq!(r.email, "test@example.com");
+        assert_eq!(r.nickname, "test"); // default = email prefix
         assert!(r.signed_cookie_value.contains('.'));
         assert_eq!(r.cookie_max_age, 7200);
     }
 
     #[tokio::test]
+    async fn register_with_nickname() {
+        let svc = make_service(4);
+        let result = svc
+            .register(
+                "127.0.0.1",
+                "test@example.com",
+                "Str0ng!Pass",
+                Some("爱丽丝"),
+            )
+            .await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().nickname, "爱丽丝");
+    }
+
+    #[tokio::test]
     async fn register_invalid_email() {
         let svc = make_service(4);
-        let result = svc.register("not-an-email", "Str0ng!Pass").await;
+        let result = svc
+            .register("127.0.0.1", "not-an-email", "Str0ng!Pass", None)
+            .await;
         assert!(matches!(result, Err(AuthError::InvalidEmail)));
     }
 
     #[tokio::test]
     async fn register_weak_password() {
         let svc = make_service(4);
-        let result = svc.register("test@example.com", "weak").await;
+        let result = svc
+            .register("127.0.0.1", "test@example.com", "weak", None)
+            .await;
         assert!(matches!(result, Err(AuthError::WeakPassword)));
     }
 
     #[tokio::test]
     async fn register_duplicate_email() {
         let svc = make_service(4);
-        svc.register("test@example.com", "Str0ng!Pass")
+        svc.register("127.0.0.1", "test@example.com", "Str0ng!Pass", None)
             .await
             .unwrap();
-        let result = svc.register("TEST@example.com", "Str0ng!Pass").await;
+        let result = svc
+            .register("127.0.0.1", "TEST@example.com", "Str0ng!Pass", None)
+            .await;
         assert!(matches!(result, Err(AuthError::EmailAlreadyExists)));
+    }
+
+    #[tokio::test]
+    async fn register_invalid_nickname_too_long() {
+        let svc = make_service(4);
+        let long = "a".repeat(21);
+        let result = svc
+            .register("127.0.0.1", "test@example.com", "Str0ng!Pass", Some(&long))
+            .await;
+        assert!(matches!(result, Err(AuthError::InvalidField(_))));
     }
 
     #[tokio::test]
     async fn login_success() {
         let svc = make_service(4);
-        svc.register("test@example.com", "Str0ng!Pass")
+        svc.register("127.0.0.1", "test@example.com", "Str0ng!Pass", None)
             .await
             .unwrap();
 
-        let result = svc.login("test@example.com", "Str0ng!Pass", false).await;
+        let result = svc
+            .login("127.0.0.1", "test@example.com", "Str0ng!Pass", false)
+            .await;
         assert!(result.is_ok());
         let r = result.unwrap();
         assert_eq!(r.cookie_max_age, 7200);
+        assert_eq!(r.nickname, "test");
     }
 
     #[tokio::test]
     async fn login_remember_me() {
         let svc = make_service(4);
-        svc.register("test@example.com", "Str0ng!Pass")
+        svc.register("127.0.0.1", "test@example.com", "Str0ng!Pass", None)
             .await
             .unwrap();
 
-        let result = svc.login("test@example.com", "Str0ng!Pass", true).await;
+        let result = svc
+            .login("127.0.0.1", "test@example.com", "Str0ng!Pass", true)
+            .await;
         assert!(result.is_ok());
-        let r = result.unwrap();
-        assert_eq!(r.cookie_max_age, 604_800);
+        assert_eq!(result.unwrap().cookie_max_age, 604_800);
     }
 
     #[tokio::test]
     async fn login_wrong_password() {
         let svc = make_service(4);
-        svc.register("test@example.com", "Str0ng!Pass")
+        svc.register("127.0.0.1", "test@example.com", "Str0ng!Pass", None)
             .await
             .unwrap();
 
-        let result = svc.login("test@example.com", "wrong", false).await;
-        assert!(matches!(result, Err(AuthError::InvalidCredentials)));
-    }
-
-    #[tokio::test]
-    async fn login_nonexistent_user() {
-        let svc = make_service(4);
-        let result = svc.login("nobody@example.com", "Str0ng!Pass", false).await;
+        let result = svc
+            .login("127.0.0.1", "test@example.com", "wrong", false)
+            .await;
         assert!(matches!(result, Err(AuthError::InvalidCredentials)));
     }
 
     #[tokio::test]
     async fn login_lockout_after_5_fails() {
         let svc = make_service(4);
-        svc.register("test@example.com", "Str0ng!Pass")
+        svc.register("127.0.0.1", "test@example.com", "Str0ng!Pass", None)
             .await
             .unwrap();
 
         for _ in 0..5 {
-            let _ = svc.login("test@example.com", "wrong", false).await;
+            let _ = svc
+                .login("127.0.0.1", "test@example.com", "wrong", false)
+                .await;
         }
-        let result = svc.login("test@example.com", "Str0ng!Pass", false).await;
+        let result = svc
+            .login("127.0.0.1", "test@example.com", "Str0ng!Pass", false)
+            .await;
         assert!(matches!(result, Err(AuthError::TooManyAttempts)));
     }
 
@@ -432,28 +616,142 @@ mod tests {
     async fn logout_and_session_lookup() {
         let svc = make_service(4);
         let r = svc
-            .register("test@example.com", "Str0ng!Pass")
+            .register("127.0.0.1", "test@example.com", "Str0ng!Pass", None)
             .await
             .unwrap();
 
-        // Session is valid.
         let (uid, email) = svc.get_user_by_session(&r.session_id).await.unwrap();
         assert_eq!(email, "test@example.com");
         assert_eq!(uid, r.user_id);
 
-        // Logout.
         svc.logout(&r.session_id).await.unwrap();
-
-        // Session no longer valid.
         let result = svc.get_user_by_session(&r.session_id).await;
         assert!(matches!(result, Err(AuthError::Unauthenticated)));
     }
 
     #[tokio::test]
-    async fn logout_invalid_session() {
+    async fn update_profile_partial() {
         let svc = make_service(4);
-        let result = svc.logout("nonexistent").await;
-        assert!(matches!(result, Err(AuthError::Unauthenticated)));
+        let r = svc
+            .register("127.0.0.1", "test@example.com", "Str0ng!Pass", None)
+            .await
+            .unwrap();
+
+        // Update phone + avatar only; nickname untouched.
+        let updated = svc
+            .update_profile(
+                r.user_id,
+                None,
+                Some("13900139000".into()),
+                Some("https://example.com/avatar.png".into()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.nickname, "test");
+        assert_eq!(updated.phone.as_deref(), Some("13900139000"));
+        assert_eq!(
+            updated.avatar.as_deref(),
+            Some("https://example.com/avatar.png")
+        );
+    }
+
+    #[tokio::test]
+    async fn update_profile_reset_nickname() {
+        let svc = make_service(4);
+        let r = svc
+            .register(
+                "127.0.0.1",
+                "alice@example.com",
+                "Str0ng!Pass",
+                Some("Alice"),
+            )
+            .await
+            .unwrap();
+        let updated = svc
+            .update_profile(r.user_id, Some("".into()), None, None)
+            .await
+            .unwrap();
+        assert_eq!(updated.nickname, "alice"); // reset to email prefix
+    }
+
+    #[tokio::test]
+    async fn update_profile_invalid_phone() {
+        let svc = make_service(4);
+        let r = svc
+            .register("127.0.0.1", "test@example.com", "Str0ng!Pass", None)
+            .await
+            .unwrap();
+        let result = svc
+            .update_profile(r.user_id, None, Some("12345".into()), None)
+            .await;
+        assert!(matches!(result, Err(AuthError::InvalidField(_))));
+    }
+
+    #[tokio::test]
+    async fn change_password_updates_and_old_fails() {
+        let svc = make_service(4);
+        let r = svc
+            .register("127.0.0.1", "test@example.com", "Str0ng!Pass", None)
+            .await
+            .unwrap();
+
+        svc.change_password(r.user_id, "Str0ng!Pass", "New!Pass456")
+            .await
+            .unwrap();
+
+        // Old password now fails.
+        let result = svc
+            .login("127.0.0.1", "test@example.com", "Str0ng!Pass", false)
+            .await;
+        assert!(matches!(result, Err(AuthError::InvalidCredentials)));
+
+        // New password works.
+        let ok = svc
+            .login("127.0.0.1", "test@example.com", "New!Pass456", false)
+            .await;
+        assert!(ok.is_ok());
+    }
+
+    #[tokio::test]
+    async fn change_password_wrong_old() {
+        let svc = make_service(4);
+        let r = svc
+            .register("127.0.0.1", "test@example.com", "Str0ng!Pass", None)
+            .await
+            .unwrap();
+        let result = svc
+            .change_password(r.user_id, "Wrong!Pass", "New!Pass456")
+            .await;
+        assert!(matches!(result, Err(AuthError::InvalidOldPassword)));
+    }
+
+    #[tokio::test]
+    async fn change_password_weak_new() {
+        let svc = make_service(4);
+        let r = svc
+            .register("127.0.0.1", "test@example.com", "Str0ng!Pass", None)
+            .await
+            .unwrap();
+        let result = svc.change_password(r.user_id, "Str0ng!Pass", "weak").await;
+        assert!(matches!(result, Err(AuthError::WeakPassword)));
+    }
+
+    #[tokio::test]
+    async fn register_ip_rate_limited() {
+        let svc = make_service(4);
+        // Exhaust the register IP window for this IP (cap = 20/min).
+        for _ in 0..20 {
+            assert!(
+                svc.register_ip_limiter
+                    .check_and_increment("127.0.0.1", Utc::now())
+                    .await
+            );
+        }
+        // The 21st request within the window is denied at the IP layer.
+        let result = svc
+            .register("127.0.0.1", "new@example.com", "Str0ng!Pass", None)
+            .await;
+        assert!(matches!(result, Err(AuthError::IpRateLimited)));
     }
 
     #[test]

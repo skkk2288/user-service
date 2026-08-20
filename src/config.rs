@@ -30,6 +30,8 @@ pub struct Config {
     pub rate_limit_max_failures: u32,
     /// Lockout duration in minutes.
     pub rate_limit_lockout_minutes: u32,
+    /// Max requests per IP per minute for register/login.
+    pub rate_limit_ip_per_minute: u32,
     /// Short-lived session TTL in seconds (remember_me=false).
     pub session_ttl_short: u64,
     /// Long-lived session TTL in seconds (remember_me=true).
@@ -57,6 +59,7 @@ impl Config {
         let bcrypt_cost = parse_u32_env("BCRYPT_COST", 12)?;
         let rate_limit_max_failures = parse_u32_env("RATE_LIMIT_MAX_FAILURES", 5)?;
         let rate_limit_lockout_minutes = parse_u32_env("RATE_LIMIT_LOCKOUT_MINUTES", 15)?;
+        let rate_limit_ip_per_minute = parse_u32_env("RATE_LIMIT_IP_PER_MINUTE", 20)?;
         let session_ttl_short = parse_u64_env("SESSION_TTL_SHORT", 7200)?;
         let session_ttl_long = parse_u64_env("SESSION_TTL_LONG", 604_800)?;
         let cors_origin =
@@ -69,6 +72,7 @@ impl Config {
             bcrypt_cost,
             rate_limit_max_failures,
             rate_limit_lockout_minutes,
+            rate_limit_ip_per_minute,
             session_ttl_short,
             session_ttl_long,
             cors_origin,
@@ -154,6 +158,7 @@ mod tests {
         assert_eq!(cfg.session_ttl_long, 604_800);
         assert_eq!(cfg.rate_limit_max_failures, 5);
         assert_eq!(cfg.rate_limit_lockout_minutes, 15);
+        assert_eq!(cfg.rate_limit_ip_per_minute, 20);
         env::remove_var("SESSION_SECRET");
     }
 

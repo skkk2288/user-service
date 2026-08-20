@@ -17,7 +17,9 @@ use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 use user_service::config::Config;
-use user_service::models::{InMemorySessionRepository, InMemoryUserRepository, RateLimiter};
+use user_service::models::{
+    InMemorySessionRepository, InMemoryUserRepository, IpRateLimiter, RateLimiter,
+};
 use user_service::services::auth_service::AuthService;
 
 // ---------------------------------------------------------------------------
@@ -32,6 +34,7 @@ fn test_app() -> axum::Router {
         bcrypt_cost: 4,
         rate_limit_max_failures: 5,
         rate_limit_lockout_minutes: 15,
+        rate_limit_ip_per_minute: 20,
         session_ttl_short: 7200,
         session_ttl_long: 604_800,
         cors_origin: "http://localhost:5173".into(),
@@ -42,6 +45,8 @@ fn test_app() -> axum::Router {
         Arc::new(InMemoryUserRepository::new()),
         Arc::new(InMemorySessionRepository::new()),
         Arc::new(RateLimiter::new(5, 15)),
+        Arc::new(IpRateLimiter::new(20)),
+        Arc::new(IpRateLimiter::new(20)),
         config,
     ));
 
