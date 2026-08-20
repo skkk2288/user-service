@@ -44,3 +44,6 @@
 | 2026-08-20 | 前端 | web/src/App.tsx | 新增 /profile、/change-password 路由 + 导航 |
 | 2026-08-20 | QA | tests/profile_integration.rs | 个人资料管理集成测试（36 cases） |
 | 2026-08-20 | QA | docs/agents/QA/test-report.md | 个人资料管理功能测试报告 |
+| 2026-08-20 | 架构师 | docs/agents/架构师/architecture.md | 用户注册+资料管理 架构设计 |
+| 2026-08-20 | 架构师 | docs/agents/架构师/api-contract.md | 用户注册+资料管理 API 契约 |
+| 2026-08-20 | 架构师 | docs/agents/架构师/data-model.md | 用户注册+资料管理 数据模型 |
