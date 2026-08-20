@@ -29,3 +29,9 @@
 | 2026-08-14 | 后端 | src/routes/health.rs | GET /ping liveness 端点 + 单元测试 |
 | 2026-08-14 | QA | tests/health_integration.rs | /ping 健康检查集成测试（7 cases） |
 | 2026-08-14 | QA | docs/agents/QA/test-report.md | /ping 健康检查功能测试报告 |
+| 2026-08-20 | 后端 | src/routes/auth.rs | PUT /api/me/profile, PUT /api/me/password, register nickname, GET /api/me 扩展 |
+| 2026-08-20 | 后端 | src/services/auth_service.rs | 资料更新/改密码业务逻辑 + IP 维度限流 |
+| 2026-08-20 | 后端 | src/models/user.rs | User 增加 nickname/phone/avatar + update_profile/update_password |
+| 2026-08-20 | 后端 | src/models/rate_limit.rs | IpRateLimiter（IP 滑动窗口限流） |
+| 2026-08-20 | 后端 | src/utils/profile.rs | 昵称/手机号/头像字段校验 |
+| 2026-08-20 | 后端 | src/middleware/client_ip.rs | ClientIp extractor（X-Forwarded-For / ConnectInfo） |
