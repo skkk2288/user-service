@@ -6,7 +6,7 @@ import { useAuth } from '@/hooks/useAuth';
 
 export default function Login() {
   const navigate = useNavigate();
-  const { setUser } = useAuth();
+  const { refreshUser } = useAuth();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -24,8 +24,9 @@ export default function Login() {
     setLoading(true);
 
     try {
-      const res = await login({ email, password, remember_me: rememberMe });
-      setUser(res);  // 用 login 返回的 { user_id, email } 直接设状态
+      await login({ email, password, remember_me: rememberMe });
+      // 登录成功后重新拉取完整资料（昵称/手机号/头像）并更新全局状态
+      await refreshUser();
       navigate('/');
     } catch (err) {
       const apiErr = err as ApiError;

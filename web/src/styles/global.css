@@ -41,7 +41,10 @@ body {
 }
 
 .form-field input[type="email"],
-.form-field input[type="password"] {
+.form-field input[type="password"],
+.form-field input[type="text"],
+.form-field input[type="tel"],
+.form-field input[type="url"] {
   width: 100%;
   padding: 10px 12px;
   border: 1px solid #ddd;
@@ -116,6 +119,12 @@ button[type="submit"]:disabled,
   border: 1px solid #fcc;
 }
 
+.alert-success {
+  background: #efe;
+  color: #2a7;
+  border: 1px solid #cfc;
+}
+
 /* ===== Auth link ===== */
 .auth-link {
   margin-top: 20px;
@@ -179,4 +188,45 @@ button[type="submit"]:disabled,
 
 .strength-rules li.unmet {
   color: #999;
+}
+
+/* ===== Profile page ===== */
+.input-readonly {
+  background: #f5f5f5;
+  color: #777;
+  cursor: not-allowed;
+}
+
+.page-note {
+  text-align: center;
+  color: #999;
+  padding: 12px 0;
+}
+
+.avatar-preview {
+  margin-top: 8px;
+}
+
+.avatar-preview img {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid #ddd;
+  display: block;
+}
+
+/* 危险操作链接按钮（退出登录等） */
+.btn-link-danger {
+  background: none;
+  border: none;
+  color: #e74c3c;
+  font-size: 0.875rem;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.btn-link-danger:hover {
+  color: #c33;
 }
