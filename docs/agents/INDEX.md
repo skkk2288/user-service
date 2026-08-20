@@ -42,3 +42,5 @@
 | 2026-08-20 | 前端 | web/src/api/auth.ts | API 封装扩展：updateProfile/changePassword + MeResponse 新字段 |
 | 2026-08-20 | 前端 | web/src/contexts/AuthContext.ts | AuthUser 扩展 nickname/phone/avatar |
 | 2026-08-20 | 前端 | web/src/App.tsx | 新增 /profile、/change-password 路由 + 导航 |
+| 2026-08-20 | QA | tests/profile_integration.rs | 个人资料管理集成测试（36 cases） |
+| 2026-08-20 | QA | docs/agents/QA/test-report.md | 个人资料管理功能测试报告 |
