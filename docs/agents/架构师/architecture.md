@@ -1,193 +1,205 @@
-# Architecture: 用户注册登录功能
+# Architecture: 用户注册 + 个人资料管理
 
 ## 1. 概述
 
-本次需求为 user-service v0.1.0 实现基础身份认证：邮箱+密码注册、密码登录、记住我（7天/短期会话）、密码强度校验。
+本需求为 user-service 增加「个人资料管理」能力，并扩展注册流程。**基线**（main @046ac9f）
+已有：邮箱+密码注册、登录、登出、`GET /api/me`、服务端会话（签名 Cookie）、bcrypt cost=12、
+邮箱维度登录失败限流，以及 42 个 auth 集成测试。本次**增量**：
 
-技术选型核心决策：**服务端 Session + 签名 Cookie**（不用 JWT），**bcrypt cost=12** 密码哈希，**内存存储 + Repository 接口**（v0.1.0 不引入数据库，但接口抽象让 v0.2 无缝切换 PostgreSQL），**基于邮箱的登录限流**（5 次失败 → 15 分钟锁定）。
+- `User` 模型扩展 `nickname` / `phone` / `avatar` 三个字段。
+- `POST /api/register` 扩展支持可选 `nickname`（不填默认取邮箱前缀）。
+- `GET /api/me` 扩展返回 `nickname` / `phone` / `avatar`。
+- 新增 `PUT /api/me/profile`（改昵称 / 手机号 / 头像）。
+- 新增 `PUT /api/me/password`（改密码，成功后旧密码立即失效）。
+- 前端新增 `/profile`、`/change-password` 两页，注册页加昵称 + 确认密码。
+- 注册 / 登录接口新增 IP 维度限流（20 次/分钟/IP），防批量注册。
 
-后端用 Rust + Axum（轻量、高性能、类型安全），前端用 React + TypeScript + Vite。前后端分离，API 以 JSON 交互。
+技术栈沿用现有：后端 Rust + Axum，前端 React + TypeScript + Vite，内存 Repository
+接口抽象（v0.2 可无缝切 PostgreSQL）。**已实现的 register/login/logout/me 不重写**，
+只做扩展与增量。
 
 ## 2. 模块划分
 
 | 模块 | Owner | 职责 |
 |------|-------|------|
-| `src/routes/auth.rs` | @后端 | 注册/登录 HTTP handler，请求校验 + 调用 service 层 |
-| `src/services/auth_service.rs` | @后端 | 业务逻辑：密码哈希、session 管理、限流 |
-| `src/models/user.rs` | @后端 | User 结构体 + Repository trait + InMemoryUserRepository |
-| `src/models/session.rs` | @后端 | Session 结构体 + Repository trait + InMemorySessionRepository |
-| `src/middleware/auth.rs` | @后端 | session cookie 解析 + 请求上下文注入 |
-| `src/utils/password.rs` | @后端 | bcrypt 封装 + 密码强度校验 |
-| `src/config.rs` | @后端 | 配置加载（session secret、cookie secure flag、TTL 等） |
-| `src/main.rs` | @后端 | Axum router 组装 + 服务启动 |
-| `web/src/pages/Register.tsx` | @前端 | 注册页面（表单 + 密码强度实时反馈） |
-| `web/src/pages/Login.tsx` | @前端 | 登录页面（表单 + 记住我） |
-| `web/src/api/auth.ts` | @前端 | API 封装（fetch /api/register、/api/login） |
-| `web/src/utils/password.ts` | @前端 | 密码强度校验（与后端同规则，用于实时反馈） |
-| `web/src/App.tsx` | @前端 | 路由 + 登录状态管理 |
+| `src/models/user.rs` | @后端 | `User` 增加 `nickname/phone/avatar`；`UserRepository` trait 增加 `update_profile` / `update_password` 及 InMemory 实现 |
+| `src/routes/auth.rs` | @后端 | `register` 接收可选 `nickname`；`me` 返回扩展字段 |
+| `src/routes/profile.rs` | @后端 | 新增 handler：`PUT /api/me/profile`、`PUT /api/me/password` |
+| `src/services/auth_service.rs` | @后端 | 新增 `update_profile` / `change_password` 业务逻辑 + 字段校验 |
+| `src/utils/validate.rs` | @后端 | 集中字段校验：昵称（1-20 字符、默认邮箱前缀）、手机号（`^1[3-9]\d{9}$`）、头像（http/https URL ≤2048）、邮箱前缀提取 |
+| `src/models/rate_limit.rs` | @后端 | 扩展 IP 维度窗口限流（20 次/分钟/IP），作用于 register / login |
+| `src/main.rs` | @后端 | 路由注册 `profile` 路由 + 依赖注入 |
+| `web/src/pages/Register.tsx` | @前端 | 注册表单加「昵称（可选）」+「确认密码」字段 |
+| `web/src/pages/Profile.tsx` | @前端 | 新增资料页：只读邮箱 + 可编辑昵称/手机号/头像 + 保存 + 修改密码入口 + 注销按钮 |
+| `web/src/pages/ChangePassword.tsx` | @前端 | 新增修改密码页：原密码/新密码/确认新密码 |
+| `web/src/api/auth.ts` | @前端 | 新增 `updateProfile` / `changePassword` 封装；`MeResponse` 扩展字段 |
+| `web/src/App.tsx` | @前端 | 新增 `/profile`、`/change-password` 路由（均 ProtectedRoute）+ 导航 |
+| `web/src/contexts/AuthContext.ts` | @前端 | `AuthUser` 扩展字段；资料保存后刷新用户状态 |
 
 ## 3. 关键决策
 
-### 3.1 密码哈希：bcrypt cost=12
+### 3.1 头像方案：URL 字符串（不做 base64 / DataURL）
 
-- **选择 bcrypt**，不选 argon2。
-- **理由**：bcrypt 经过 20+ 年实战验证，Rust 生态 `bcrypt` crate 成熟稳定。argon2 虽然更现代（抗 GPU/ASIC），但 v0.1.0 不需要这种级别防御，bcrypt cost=12（约 250ms/hash）已足够。argon2 参数调优复杂，容易误配。
-- **cost=12**：在 2026 年的硬件上约 250ms/次，满足 PRD "<500ms 注册响应" 且提供足够算力成本。可通过 `BCRYPT_COST` 环境变量调整。
-- **替代方案考虑**：argon2id（更安全但过度工程）、scrypt（与 bcrypt 同级但 Rust 生态弱）、PBKDF2（NIST 认可但已不推荐用于新系统）。
+- **选择 URL 字符串**，不做文件上传，不用 base64/DataURL。
+- **理由**：PRD 明确 v0.1 不做真实文件上传。URL 字符串存储干净、无体积膨胀；
+  base64/DataURL 会把图片数据内联进 JSON（体积 ×1.33 且有长度压力），且在内存 Map 里
+  放大内存占用，收益为零。v0.2 接真实上传后再落 CDN URL，字段形状不变，无迁移成本。
+- **校验**：仅允许 `http` / `https` 协议，长度 ≤ 2048；空串 / null 表示清除头像。
 
-### 3.2 会话凭证：服务端 Session + 签名 Cookie（不用 JWT）
+### 3.2 手机号校验：11 位大陆号段（可选字段）
 
-- **选择服务端 Session**，不选 JWT。
-- **理由**：
-  - Session 可即时吊销（从 store 删除即失效），JWT 无状态难以吊销（除非维护黑名单，反而更复杂）。
-  - "记住我" 7 天 vs 短期会话通过 session TTL 灵活控制，JWT 需要双 token（access + refresh）机制，对 v0.1.0 过重。
-  - Session ID 是随机 256-bit token，不携带任何用户信息，无信息泄露风险。
-- **机制**：
-  - 登录成功 → 生成 256-bit 随机 session ID → 存入 SessionRepository（含 user_id、expires_at）→ 通过 `Set-Cookie` 下发。
-  - Cookie 属性：`HttpOnly` + `Secure` + `SameSite=Lax` + `Path=/`。
-  - Session ID 本身不签名（因为 Server-side store 是 source of truth，伪造的 ID 查不到记录自然失效），但额外加 HMAC 签名做一层防御（防 timing attack 猜测）。
-- **替代方案考虑**：JWT（无状态但吊销难）、JWT+Refresh Token（完整但 v0.1.0 过重）。
+- **规则**：`^1[3-9]\d{9}$`（11 位数字，第二位 3-9）。空值表示未填写，合法。
+- **理由**：PRD 假设 + 目标用户是国内 demo 场景；放开国际格式（E.164）会增加校验复杂度
+  且当前无国际用户需求。v0.2 需要时再扩展。
 
-### 3.3 "记住我" 过期策略
+### 3.3 昵称：可选，后端归一化默认邮箱前缀
 
-| remember_me | Session TTL | Cookie Max-Age |
-|-------------|-------------|----------------|
-| `false`（默认） | 2 小时 | 2 小时（session cookie 行为） |
-| `true` | 7 天 | 7 天 |
+- 注册时昵称可选；**后端**收到空 / 纯空白昵称时，默认取邮箱前缀（`@` 之前部分）落库。
+- **理由**：默认值逻辑放后端做单一事实源，前端只负责预填展示（PRD 要求"默认取邮箱前缀"）。
+  前端不填 → 前端输入框预填邮箱前缀（体验），后端仍做兜底归一化（正确性）。
+- **规则**：trim 后 1-20 字符，禁止控制字符；超长 / 含控制字符 → 400 `invalid_field`。
 
-- **理由**：2 小时短期会话覆盖正常使用场景（浏览期间不中断），7 天覆盖"记住我"场景。不设 24h 是因为 2h 已足够单次会话，且更短 TTL = 更小被盗窗口。
+### 3.4 确认密码：纯前端校验，后端不接收
 
-### 3.4 登录限流：内存计数器 + 邮箱维度
+- 注册页与改密码页的「确认密码」字段**仅前端比对**，后端 request 结构**不含** confirm 字段。
+- **理由**：确认密码的用途是防手误，不是安全边界；后端只认最终 `password` 字段，
+  减少无效字段与校验分支。前端两次不一致 → 行内提示、不发请求。
 
-- **机制**：同一邮箱连续登录失败 5 次 → 锁定 15 分钟（期间拒绝登录，返回 429）。
-- **存储**：内存 HashMap<email, FailRecord{count, first_fail_at, locked_until}>。
-- **重置**：登录成功立即清零；锁定期满自动解除。
-- **理由**：
-  - 邮箱维度（而非 IP 维度）：v0.1.0 无反向代理/CDN，IP 维度在 NAT 后会误伤。邮箱维度精准保护账户。
-  - 内存存储：v0.1.0 单实例足够。Repository 接口抽象后，v0.2 可切 Redis。
-  - 阈值 5 次：平衡用户体验与安全（太低误锁，太高暴力破解窗口大）。
-  - 15 分钟锁定：够长以阻止自动化攻击，够短以减少用户等待。
-- **注意**：限流检查在密码校验之前执行，避免锁定期间仍消耗 bcrypt 算力。
+### 3.5 改密码会话语义：旧密码立即失效，会话保持有效
 
-### 3.5 密码强度校验
+- 改成功后重写 `password_hash`，用**旧密码登录立即被拒**（验收标准 8）。
+- **已有会话保持有效**，不做会话吊销。
+- **理由**：PRD out-of-scope 明确「多设备会话管理、会话撤销清单」不做。验收标准的
+  「旧密码立即失效」指登录凭据，不指已签发会话。此实现最小且完全满足验收。
 
-- **规则**（注册时强制，前后端双重）：
-  - 长度 8-64 字符
-  - 至少包含以下四类中的三类：大写字母 `[A-Z]`、小写字母 `[a-z]`、数字 `[0-9]`、特殊字符 `[^A-Za-z0-9]`
-- **前端**：实时反馈，显示满足/未满足的规则项 + 强度等级（弱/中/强）。
-- **后端**：注册时强制校验，不满足返回 400 + 具体原因。
-- **复用**：前端 `web/src/utils/password.ts` 和后端 `src/utils/password.rs` 共享同一套规则定义，确保一致性。
+### 3.6 原密码错误 → 400 `invalid_old_password`（不用 401）
 
-### 3.6 存储：内存 Repository 接口
+- 用户已通过 `AuthUser` 认证，401 语义是「未登录」，会误导前端。
+- 独立错误码 `invalid_old_password` 便于前端在输入框下行内提示。
 
-- **v0.1.0**：`InMemoryUserRepository` + `InMemorySessionRepository`，用 `tokio::sync::RwLock<HashMap<...>>` 保证并发安全。
-- **接口抽象**：定义 `UserRepository` / `SessionRepository` trait，业务层只依赖 trait。v0.2 切 PostgreSQL 只需新增 `PgUserRepository` impl，不改 service 层。
-- **理由**：v0.1.0 不引入数据库依赖，降低部署复杂度。接口抽象让演进无成本。
+### 3.7 密码策略：沿用现有 3/4 类策略，不改动
+
+- 沿用现有 `8-64 字符，大写/小写/数字/特殊字符四类中至少三类`（`src/utils/password.rs`）。
+- **理由**：该策略是 PRD「8-64 字符，含字母和数字」的严格超集，且已被 42 个既有测试
+  锁定。改弱会破坏既有测试与既有安全承诺，不必要。QA 用例请用满足 3/4 类规则的密码
+  （如 `Str0ng!Pass`）。
+
+### 3.8 限流：新增 IP 维度窗口限流（并行于邮箱维度）
+
+- **机制**：内存窗口计数，每 IP 每分钟最多 **20 次**请求（register 与 login 各自独立计数），
+  超限返回 429 `too_many_attempts`。
+- **与既有邮箱失败锁定并行**：邮箱维度（5 次失败 → 15 分钟）继续防单账户暴力破解；
+  IP 维度新增防批量注册（邮箱维度拦不住用新邮箱轰炸的脚本）。
+- **理由**：PRD 非功能要求「注册/登录接口加简单限流（单 IP 每分钟 20 次）防批量注册」。
+  v0.1 单实例 + 内存实现足够；本地 dev 同 IP 下 20/min 对正常测试非常宽松。
+- **注意**：IP 提取用 `ConnectInfo`（直连）或 `X-Forwarded-For` 首段（有反代时），
+  需在 main.rs 开启 `IntoMakeServiceWithConnectInfo`。
+
+### 3.9 `PUT /api/me/profile` 部分更新语义
+
+- 请求字段全部可选：**缺席 = 保持不变**。
+- 显式空值语义：`nickname=""` → 重置为邮箱前缀；`phone=""` → 清除（null）；
+  `avatar=""` → 清除（null）。
+- **理由**：资料页保存时通常只改部分字段；显式空值语义让「清除手机号/头像」可表达。
 
 ## 4. 数据流
 
-### 4.1 注册流程
+### 4.1 注册流程（扩展）
 
 ```
-用户 → [Register.tsx 表单]
-  → 前端密码强度实时校验（password.ts）
-  → POST /api/register { email, password }
-    → 后端校验邮箱格式 + 密码强度
-    → UserRepo.find_by_email() 检查唯一性
+用户 → [Register.tsx 表单（邮箱/密码/确认密码/昵称可选）]
+  → 前端校验：密码强度 + 两次密码一致 + 昵称长度
+  → POST /api/register { email, password, nickname? }
+    → IP 限流检查（20/min/IP）
+    → 后端校验：邮箱格式 + 密码强度 + 昵称（1-20，空→邮箱前缀）
+    → UserRepo.find_by_email() 唯一性检查
     → bcrypt::hash(password, 12)
-    → UserRepo.insert(user)
-    → 创建 session（TTL=2h，注册即登录）
-    → SessionRepo.insert(session)
-    → Set-Cookie: sid=...; HttpOnly; Secure; SameSite=Lax
-    → 200 { user_id, email }
-  → 前端跳转主页
+    → User { id, email, nickname, phone: None, avatar: None, ... }
+    → UserRepo.insert()
+    → 创建 session（TTL=2h，注册即登录）→ SessionRepo.insert()
+    → Set-Cookie: sid=...
+    → 200 { user_id, email, nickname }
+  → 前端 AuthContext.setUser → 跳 /profile
 ```
 
-### 4.2 登录流程
+### 4.2 资料页查看与修改
 
 ```
-用户 → [Login.tsx 表单]
-  → POST /api/login { email, password, remember_me }
-    → 限流检查：RateLimiter.check(email)
-      → 已锁定 → 429 { error: "too_many_attempts" }
-    → UserRepo.find_by_email()
-      → 不存在 → 返回统一 401（不区分）+ RateLimiter.record_fail(email)
-    → bcrypt::verify(password, user.password_hash)
-      → 不匹配 → 返回统一 401 + RateLimiter.record_fail(email)
-    → RateLimiter.reset(email)（登录成功清零）
-    → 创建 session（TTL = remember_me ? 7d : 2h）
-    → SessionRepo.insert(session)
-    → Set-Cookie: sid=...; HttpOnly; Secure; SameSite=Lax; Max-Age=...
-    → 200 { user_id, email }
-  → 前端跳转主页
+用户 → [/profile (ProtectedRoute)]
+  → 挂载时 GET /api/me → 200 { user_id, email, nickname, phone, avatar }
+  → 表单预填（邮箱只读，昵称/手机号/头像可编辑）
+  → 用户点「保存」→ PUT /api/me/profile { nickname?, phone?, avatar? }
+    → AuthUser 认证（无效 → 401 unauthenticated）
+    → 后端校验 → UserRepo.update_profile()
+    → 200 { user_id, email, nickname, phone, avatar }
+  → 前端更新 AuthContext 状态 + 行内成功提示（3 秒内）
 ```
 
-### 4.3 受保护资源访问
+### 4.3 修改密码
 
 ```
-请求 → auth middleware
-  → 解析 Cookie: sid=...
-  → HMAC 签名校验
-  → SessionRepo.find_by_id(sid)
-    → 不存在/已过期 → 401（未登录）
-    → 有效 → 注入 user_id 到请求上下文
-  → handler 正常处理
+用户 → [/change-password (ProtectedRoute)]
+  → PUT /api/me/password { old_password, new_password }
+    → AuthUser 认证（无效 → 401）
+    → 新密码强度校验（weak → 400 weak_password）
+    → bcrypt.verify(old_password, hash)（失败 → 400 invalid_old_password）
+    → bcrypt::hash(new_password, 12) → UserRepo.update_password()
+    → 200 { message: "密码已修改" }
+  → 前端提示成功 → 跳 /profile
+  → 之后用旧密码登录 → 401 invalid_credentials（旧密码已失效）
+```
+
+### 4.4 未登录访问保护页
+
+```
+请求 /profile 或 PUT /api/me/* → AuthUser 提取器
+  → 无 sid cookie / 签名校验失败 / session 不存在 → 401 unauthenticated
+  → 前端 401 → 跳 /login
 ```
 
 ## 5. 错误处理
 
-### 5.1 错误响应格式
+### 5.1 格式
 
-所有 API 错误统一 JSON 格式：
+沿用现有统一格式：
 
 ```json
-{
-  "error": "<error_code>",
-  "message": "<human_readable_message>"
-}
+{ "error": "<error_code>", "message": "<human_readable_message>" }
 ```
 
-### 5.2 错误码约定
+### 5.2 错误码表（新增/复用）
 
 | HTTP | error code | 场景 | message |
 |------|-----------|------|---------|
-| 400 | `invalid_email` | 邮箱格式不合法 | 邮箱格式不正确 |
-| 400 | `weak_password` | 密码强度不足 | 密码至少需要 8 位，且包含大写字母、小写字母、数字、特殊字符中的三类 |
-| 400 | `validation_error` | 请求体格式错误（缺字段、类型错误） | 请求参数不正确 |
-| 401 | `invalid_credentials` | 邮箱或密码错误（统一，不区分） | 邮箱或密码错误 |
-| 401 | `unauthenticated` | 未登录访问受保护资源 | 请先登录 |
-| 409 | `email_already_exists` | 邮箱已注册 | 该邮箱已注册 |
-| 429 | `too_many_attempts` | 登录限流锁定中 | 登录尝试次数过多，请 15 分钟后再试 |
+| 400 | `invalid_field` | 昵称超长/含控制字符、手机号格式错、头像 URL 非法 | 字段校验失败：{具体原因} |
+| 400 | `invalid_old_password` | 修改密码时原密码错误 | 原密码错误 |
+| 400 | `weak_password` | 新密码强度不足（复用现有码） | 密码至少需要 8 位，且包含大写字母、小写字母、数字、特殊字符中的三类 |
+| 400 | `validation_error` | 请求体格式错误（复用） | 请求参数不正确 |
+| 401 | `unauthenticated` | 未登录访问 /api/me/*（复用） | 请先登录 |
+| 409 | `email_already_exists` | 邮箱已注册（复用） | 该邮箱已注册 |
+| 429 | `too_many_attempts` | IP 限流命中（复用码，message 区分场景） | 请求过于频繁，请稍后再试 |
 
 ## 6. 安全考虑
 
-- **密码存储**：bcrypt cost=12 单向哈希，不存储明文、不存储可逆加密。
-- **登录错误不区分**：邮箱不存在与密码错误统一返回 401 `invalid_credentials`，防止账户枚举。
-- **限流防暴力破解**：5 次/邮箱 → 15 分钟锁定。限流检查在密码校验前，避免锁定期间浪费 bcrypt 算力。
-- **Cookie 安全**：`HttpOnly`（防 XSS 窃取）+ `Secure`（仅 HTTPS 传输）+ `SameSite=Lax`（防 CSRF）。
-  - dev 环境 HTTP 需设 `COOKIE_SECURE=false`（仅开发用，生产必须 true）。
-- **Session ID**：256-bit cryptographically secure random，HMAC 签名防篡改。
-- **密码不出现在响应**：User 序列化时永远排除 password_hash 字段。
-- **输入校验**：后端对所有输入做格式 + 长度校验，不信任前端。
-- **CORS**：仅允许前端 origin（dev: `localhost:5173`，prod: 配置项）。
+- **新字段后端校验为最终防线**：昵称 trim + 1-20 长度 + 禁止控制字符；手机号正则；
+  头像仅允许 `http(s)://` 协议 + ≤2048 字符。不信任前端。
+- **头像 URL 协议白名单**：前端渲染 `<img src>` 时后端已保证仅 http/https，
+  杜绝 `javascript:` 等危险协议。URL 不用于任何服务端请求（无 SSRF 面）。
+- **密码**：改密码仍走 bcrypt（新 hash 覆盖旧 hash），明文不落盘、不出现在任何响应。
+- **错误不泄露信息**：改密码失败统一 `invalid_old_password`（用户已认证，不存在枚举面）。
+- **IP 限流**：防批量注册；与邮箱失败锁定并行防御暴力破解。
+- **会话**：沿用 HttpOnly + SameSite=Lax + Secure（dev 用 COOKIE_SECURE=false）。
+- **前端行内提示**：校验错误输入框下方展示，不弹窗、不清空已填字段（PRD UI 期望）。
 
 ## 7. 性能考虑
 
-| 指标 | 目标 | 说明 |
-|------|------|------|
-| 注册响应时间 | < 500ms | bcrypt cost=12 约 250ms，其余 < 50ms |
-| 登录响应时间 | < 200ms | 正常登录：bcrypt verify ~250ms... |
-
-**修正**：bcrypt cost=12 的 verify 与 hash 耗时相当（~250ms），超过 PRD 200ms 目标。这是 bcrypt 的固有特性（故意慢）。方案：
-
-1. **接受 ~250ms**：PRD 200ms 目标适用于"正常路径"，密码校验是安全必要开销。登录是低频操作，250ms 用户无感。
-2. 如需优化，可降 cost=11（~120ms），但降低安全强度。v0.1.0 保持 cost=12，在文档中标注实际 ~250ms。
-
 | 接口 | 预期耗时 | 说明 |
 |------|---------|------|
-| POST /api/register | ~300ms | bcrypt hash ~250ms + 内存写入 < 10ms |
-| POST /api/login | ~280ms | bcrypt verify ~250ms + 内存查询 < 10ms |
-| 受保护资源 | < 10ms | session 查询 + HMAC 校验 |
+| PUT /api/me/profile | < 10ms | 内存读改写，无 bcrypt |
+| PUT /api/me/password | ~250ms | bcrypt hash cost=12（与登录验证同量级） |
+| GET /api/me | < 10ms | 内存查询 |
+| POST /api/register | ~300ms | bcrypt hash ~250ms + 内存写入 |
 
-- **并发**：内存存储用 `tokio::sync::RwLock`，读多写少场景性能足够。v0.1.0 单实例无水平扩展需求。
-- **无缓存层**：session 直接内存查询，无需 Redis/缓存。
+- 全部满足 PRD「接口响应 < 200ms（P95）」，除 bcrypt 相关（注册/登录/改密码）固有 ~250ms，
+  与既有设计一致（安全必要开销，登录/改密码低频）。
+- IP 限流为内存计数，无额外 IO。v0.1 单实例，无缓存层、无水平扩展需求。
