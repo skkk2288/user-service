@@ -35,3 +35,4 @@
 | 2026-08-20 | 前端 | web/src/api/auth.ts | API 封装扩展：updateProfile/changePassword + MeResponse 新字段 |
 | 2026-08-20 | 前端 | web/src/contexts/AuthContext.ts | AuthUser 扩展 nickname/phone/avatar |
 | 2026-08-20 | 前端 | web/src/App.tsx | 新增 /profile、/change-password 路由 + 导航 |
+| 2026-08-21 | 前端 | web/src/App.tsx | 已登录访问 /login 自动重定向（PublicOnlyRoute） |
