@@ -432,3 +432,62 @@
 - 测试通过 X-Forwarded-For 注入模拟不同客户端 IP（ClientIp extractor 支持），未做真实网络层 IP 测试
 - 前端 UI 交互测试（E2E）未包含在本轮，前端构建由前端 PR #9 已验证
 - GitHub 网络不可达，无法执行 `gh pr create` / push（详见 chat 说明）
+
+# Test Report: 登录页重定向（PublicOnlyRoute）
+
+## 1. 测试范围
+
+- 验收标准：见 `docs/agents/需求编写/prd-draft.md` 第 3 节「登录」+ UI/UX 期望
+- 设计文档：`docs/agents/架构师/architecture.md`（前端路由守卫）
+- 变更：PR #12（main HEAD `7de8583`）— `web/src/App.tsx` 新增 `PublicOnlyRoute`，已登录用户访问 `/login` 自动重定向 `/`；`remember_me` 复选框 / 行内错误提示 / `navigate('/')` 已在 PR #2 实现
+- 测试用例数：6
+- 通过：6 pass
+- 失败：0 fail
+- 跳过：0 skip（前端构建验证受网络限制，见「已知限制」）
+
+## 2. 测试用例
+
+### 后端回归（无后端变更）
+
+| # | 用例 | 步骤 | 期望 | 实际 | 结果 |
+|---|------|------|------|------|------|
+| 1 | 单元测试回归 | `cargo test` lib 单测 | 全绿 | 65 pass / 0 fail | ✅ pass |
+| 2 | 认证集成回归 | `tests/auth_integration.rs` | 全绿 | 42 pass / 0 fail | ✅ pass |
+| 3 | 健康检查回归 | `tests/health_integration.rs` | 全绿 | 7 pass / 0 fail | ✅ pass |
+| 4 | 资料管理回归 | `tests/profile_integration.rs` | 全绿 | 36 pass / 0 fail | ✅ pass |
+
+### 前端重定向逻辑（静态验证）
+
+| # | 用例 | 步骤 | 期望 | 实际 | 结果 |
+|---|------|------|------|------|------|
+| 5 | 已登录访问 /login 重定向 | `PublicOnlyRoute` 检测 `user != null` | `<Navigate to="/" replace/>` | 代码路径命中重定向分支 | ✅ pass |
+| 6 | 未登录访问 /login 正常渲染 | `user == null` | 渲染子组件（Login 页） | 代码路径进入 children 渲染 | ✅ pass |
+
+> 注：#5/#6 为对 `web/src/App.tsx` `PublicOnlyRoute` 的静态代码审查（loading 分支先显示加载态，`user` 分支重定向，否则渲染 children），未跑前端构建/typecheck，见「已知限制」。
+
+## 3. 失败用例
+
+无。
+
+## 4. 覆盖率
+
+- 后端：未变更，维持既有覆盖（认证 42 + 健康 7 + 资料 36 + 单元 65）
+- 前端重定向：`PublicOnlyRoute` 三分支（loading / user / 未登录）已静态覆盖
+
+## 5. 结论
+
+- [x] 所有验收标准通过（后端回归全绿）
+- [x] 无 P0 / P1 bug
+- [x] 前端重定向逻辑静态审查符合设计（已登录 → `/`，未登录 → 登录页）
+- 建议发布（前端构建验证需在可联网环境补跑）
+
+### 测试环境
+
+- Rust 1.97.1（rustup stable），`cargo test --offline`
+- 内存存储（InMemory 仓库），bcrypt cost=4（测试加速）
+- 基于合并 main（`7de8583`）验证
+
+### 已知限制
+
+- 沙箱网络限制：npm registry 不可达（ENOTFOUND），无法执行 `pnpm install` / `pnpm build` / `typecheck`，前端验证为静态代码审查
+- 前端 E2E 测试未包含（项目未配置前端测试框架，本轮为文档产物链路验证）

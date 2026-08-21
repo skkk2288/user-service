@@ -48,3 +48,4 @@
 | 2026-08-20 | 架构师 | docs/agents/架构师/architecture.md | 用户注册+资料管理 架构设计 |
 | 2026-08-20 | 架构师 | docs/agents/架构师/api-contract.md | 用户注册+资料管理 API 契约 |
 | 2026-08-20 | 架构师 | docs/agents/架构师/data-model.md | 用户注册+资料管理 数据模型 |
+| 2026-08-21 | QA | docs/agents/QA/test-report.md | 登录页重定向（PublicOnlyRoute）测试报告 |
