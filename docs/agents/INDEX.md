@@ -29,6 +29,13 @@
 | 2026-08-14 | 后端 | src/routes/health.rs | GET /ping liveness 端点 + 单元测试 |
 | 2026-08-14 | QA | tests/health_integration.rs | /ping 健康检查集成测试（7 cases） |
 | 2026-08-14 | QA | docs/agents/QA/test-report.md | /ping 健康检查功能测试报告 |
+
+| 2026-08-20 | 后端 | src/routes/auth.rs | PUT /api/me/profile, PUT /api/me/password, register nickname, GET /api/me 扩展 |
+| 2026-08-20 | 后端 | src/services/auth_service.rs | 资料更新/改密码业务逻辑 + IP 维度限流 |
+| 2026-08-20 | 后端 | src/models/user.rs | User 增加 nickname/phone/avatar + update_profile/update_password |
+| 2026-08-20 | 后端 | src/models/rate_limit.rs | IpRateLimiter（IP 滑动窗口限流） |
+| 2026-08-20 | 后端 | src/utils/profile.rs | 昵称/手机号/头像字段校验 |
+| 2026-08-20 | 后端 | src/middleware/client_ip.rs | ClientIp extractor（X-Forwarded-For / ConnectInfo） |
 | 2026-08-20 | 前端 | web/src/pages/Register.tsx | 注册表单扩展：可选昵称字段 + 确认密码 |
 | 2026-08-20 | 前端 | web/src/pages/Profile.tsx | 资料页：只读邮箱 + 编辑昵称/手机号/头像 + 保存 + 改密入口 + 退出登录 |
 | 2026-08-20 | 前端 | web/src/pages/ChangePassword.tsx | 修改密码页：原/新/确认新密码 + 强度反馈 |
@@ -36,3 +43,8 @@
 | 2026-08-20 | 前端 | web/src/contexts/AuthContext.ts | AuthUser 扩展 nickname/phone/avatar |
 | 2026-08-20 | 前端 | web/src/App.tsx | 新增 /profile、/change-password 路由 + 导航 |
 | 2026-08-21 | 前端 | web/src/App.tsx | 已登录访问 /login 自动重定向（PublicOnlyRoute） |
+| 2026-08-20 | QA | tests/profile_integration.rs | 个人资料管理集成测试（36 cases） |
+| 2026-08-20 | QA | docs/agents/QA/test-report.md | 个人资料管理功能测试报告 |
+| 2026-08-20 | 架构师 | docs/agents/架构师/architecture.md | 用户注册+资料管理 架构设计 |
+| 2026-08-20 | 架构师 | docs/agents/架构师/api-contract.md | 用户注册+资料管理 API 契约 |
+| 2026-08-20 | 架构师 | docs/agents/架构师/data-model.md | 用户注册+资料管理 数据模型 |

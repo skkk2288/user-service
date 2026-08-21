@@ -3,16 +3,19 @@
 //! Assembles the Axum router with CORS, wires up the auth service with
 //! in-memory repositories, and starts the HTTP server.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
 use user_service::config::Config;
-use user_service::models::{InMemorySessionRepository, InMemoryUserRepository, RateLimiter};
+use user_service::models::{
+    InMemorySessionRepository, InMemoryUserRepository, IpRateLimiter, RateLimiter,
+};
 use user_service::routes;
 use user_service::services::auth_service::AuthService;
 
@@ -40,10 +43,14 @@ async fn main() -> anyhow::Result<()> {
         config.rate_limit_max_failures,
         config.rate_limit_lockout_minutes,
     ));
+    let register_ip_limiter = Arc::new(IpRateLimiter::new(config.rate_limit_ip_per_minute));
+    let login_ip_limiter = Arc::new(IpRateLimiter::new(config.rate_limit_ip_per_minute));
     let auth_service = Arc::new(AuthService::new(
         user_repo,
         session_repo,
         rate_limiter,
+        register_ip_limiter,
+        login_ip_limiter,
         Arc::new(config.clone()),
     ));
 
@@ -53,6 +60,7 @@ async fn main() -> anyhow::Result<()> {
         .allow_methods([
             axum::http::Method::GET,
             axum::http::Method::POST,
+            axum::http::Method::PUT,
             axum::http::Method::OPTIONS,
         ])
         .allow_headers(Any)
@@ -65,14 +73,20 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/login", post(routes::auth::login))
         .route("/api/logout", post(routes::auth::logout))
         .route("/api/me", get(routes::auth::me))
+        .route("/api/me/profile", put(routes::auth::update_profile))
+        .route("/api/me/password", put(routes::auth::change_password))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(auth_service);
 
-    // Start server.
+    // Start server with ConnectInfo so handlers can read the client IP.
     let listener = tokio::net::TcpListener::bind(&config.listen_addr).await?;
     tracing::info!("Listening on {}", config.listen_addr);
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }
