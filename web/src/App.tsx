@@ -70,6 +70,24 @@ function ProtectedRoute({ children }: { children: ReactNode }) {
 }
 
 // ---------------------------------------------------------------------------
+// 公开页守卫：已登录访问 /login 自动重定向到首页
+// ---------------------------------------------------------------------------
+
+function PublicOnlyRoute({ children }: { children: ReactNode }) {
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return <div className="auth-container"><p>加载中…</p></div>;
+  }
+
+  if (user) {
+    return <Navigate to="/" replace />;
+  }
+
+  return <>{children}</>;
+}
+
+// ---------------------------------------------------------------------------
 // 主页（已登录视图）
 // ---------------------------------------------------------------------------
 
@@ -121,7 +139,7 @@ export default function App() {
               </ProtectedRoute>
             }
           />
-          <Route path="/login" element={<Login />} />
+          <Route path="/login" element={<PublicOnlyRoute><Login /></PublicOnlyRoute>} />
           <Route path="/register" element={<Register />} />
         </Routes>
       </BrowserRouter>
